@@ -1,119 +1,134 @@
-import os
-import textwrap
+import telebot
 from PIL import Image, ImageDraw, ImageFont
+import io
+import textwrap
 import google.generativeai as genai
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
-TOKEN = os.environ.get("8770690142:AAGqjUAmnIiZXTp9E-pvoqq51JyefmQPe44")
-GEMINI_API_KEY = os.environ.get("AIzaSyD8CUadzjLpd0dgS0HuoFQCGMpFn5uQw1E")
+TOKEN = "8770690142:AAGqjUAmnIiZXTp9E-pvoqq51JyefmQPe44"
+GEMINI_API_KEY = "AIzaSyD8CUadzjLpd0dgS0HuoFQCGMpFn5uQw1E"
 
+bot = telebot.TeleBot(TOKEN)
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-1.5-pro-latest')
 
-PEGANDO_TEMA, PEGANDO_ARROBA = range(2)
+# Fontes
+try:
+    FONTE_TITULO = ImageFont.truetype("arialbd.ttf", 80)
+    FONTE_TEXTO = ImageFont.truetype("arial.ttf", 45)
+    FONTE_PEQUENA = ImageFont.truetype("arial.ttf", 35)
+except:
+    FONTE_TITULO = ImageFont.load_default()
+    FONTE_TEXTO = ImageFont.load_default()
+    FONTE_PEQUENA = ImageFont.load_default()
 
-def criar_imagem_carrossel(texto, numero_imagem, total_imagens, arroba):
-    largura, altura = 1080, 1080
-    cor_fundo = (15, 15, 15)
-    cor_texto = (255, 255, 255)
-    cor_destaque = (0, 255, 150)
+def gerar_conteudo_com_ia(tema):
+    prompt = f"""
+    Você é um social media expert que cria carrosséis virais para Instagram e TikTok.
+    Crie o roteiro de um carrossel de 5 slides sobre o tema: "{tema}"
+
+    Regras importantes:
+    1. Adapte a linguagem para o tema. Se for sério, seja profissional. Se for leve, seja descontraído.
+    2. Use gatilhos de curiosidade e frases curtas. Textão não engaja.
+    3. Estrutura fixa de 5 slides:
+    4. Responda EXATAMENTE neste formato, sem adicionar nada antes ou depois:
+
+    CAPA: Título Chamativo e Curto | Subtítulo: Arraste pro lado pra descobrir
+    DICA1: Título do Ponto 1 | Texto de 1-2 frases explicando o ponto 1
+    DICA2: Título do Ponto 2 | Texto de 1-2 frases explicando o ponto 2
+    DICA3: Título do Ponto 3 | Texto de 1-2 frases explicando o ponto 3
+    CTA: Chamada pra Ação | Texto final incentivando seguir, salvar ou comentar
+    """
+
+    response = model.generate_content(prompt)
+    return response.text
+
+def criar_slide(titulo, texto, cor_fundo, num_slide, total_slides):
+    largura, altura = 1080, 1350
     img = Image.new('RGB', (largura, altura), color=cor_fundo)
     draw = ImageDraw.Draw(img)
+
+    # Título
+    linhas_titulo = textwrap.wrap(titulo.upper(), width=14)
+    y = 160
+    for linha in linhas_titulo:
+        w, h = draw.textbbox((0, 0), linha, font=FONTE_TITULO)[2:]
+        draw.text(((largura - w) / 2, y), linha, font=FONTE_TITULO, fill="white")
+        y += h + 20
+
+    # Texto
+    linhas_texto = textwrap.wrap(texto, width=28)
+    y = 700
+    for linha in linhas_texto:
+        w, h = draw.textbbox((0, 0), linha, font=FONTE_TEXTO)[2:]
+        draw.text(((largura - w) / 2, y), linha, font=FONTE_TEXTO, fill="white")
+        y += h + 15
+
+    # Numeração e @
+    draw.text((largura - 120, altura - 80), f"{num_slide}/{total_slides}", font=FONTE_PEQUENA, fill="white")
+    draw.text((60, altura - 80), "@seu_insta", font=FONTE_PEQUENA, fill="white")
+
+    bio = io.BytesIO()
+    bio.name = 'image.jpeg'
+    img.save(bio, 'JPEG', quality=95)
+    bio.seek(0)
+    return bio
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "Fala! Manda o tema do seu carrossel:\n\n/criar 3 dicas para dormir melhor\n/criar como fazer bolo de chocolate\n/criar por que sua empresa precisa de tráfego pago\n\nQualquer nicho. Eu crio na hora.")
+
+@bot.message_handler(commands=['criar'])
+def criar(message):
+    tema = message.text.replace('/criar ', '').strip()
+    if not tema:
+        bot.reply_to(message, "Manda assim: /criar seu tema aqui")
+        return
+
+    msg_espera = bot.reply_to(message, f"Criando carrossel sobre '{tema}'... 🧠✨")
+
     try:
-        fonte_titulo = ImageFont.truetype("DejaVuSans-Bold.ttf", 70)
-        fonte_texto = ImageFont.truetype("DejaVuSans.ttf", 55)
-        fonte_rodape = ImageFont.truetype("DejaVuSans.ttf", 35)
-    except IOError:
-        fonte_titulo = ImageFont.load_default()
-        fonte_texto = ImageFont.load_default()
-        fonte_rodape = ImageFont.load_default()
+        conteudo_ia = gerar_conteudo_com_ia(tema)
 
-    margem = 80
-    y_texto = 220
+        slides = []
+        cores = ["#1A237E", "#283593", "#303F9F", "#3949AB", "#1A237E"] # Tons de azul/roxo universal
+        for linha in conteudo_ia.strip().split('\n'):
+            if '|' in linha and ':' in linha:
+                partes = linha.split('|', 1)
+                titulo = partes[0].split(':', 1)[1].strip()
+                texto = partes[1].strip()
+                slides.append({"titulo": titulo, "texto": texto})
 
-    if numero_imagem == 1:
-        linhas = textwrap.wrap(texto.upper(), width=15)
-        for linha in linhas:
-            w, h = draw.textbbox((0,0), linha, font=fonte_titulo)[2:]
-            draw.text(((largura-w)/2, y_texto), linha, font=fonte_titulo, fill=cor_destaque)
-            y_texto += h + 20
-    else:
-        linhas = textwrap.wrap(texto, width=25)
-        for linha in linhas:
-            draw.text((margem, y_texto), linha, font=fonte_texto, fill=cor_texto)
-            y_texto += 70
+        if len(slides)!= 5:
+            bot.edit_message_text("A IA se confundiu com o tema. Tenta reformular ou ser mais específico.", message.chat.id, msg_espera.message_id)
+            return
 
-    if numero_imagem == total_imagens:
-        w, h = draw.textbbox((0,0), arroba, font=fonte_rodape)[2:]
-        draw.text(((largura-w)/2, altura-120), arroba, font=fonte_rodape, fill=cor_destaque)
+        medias = []
+        for i, slide in enumerate(slides):
+            img_bio = criar_slide(slide["titulo"], slide["texto"], cores[i], i + 1, 5)
+            medias.append(telebot.types.InputMediaPhoto(img_bio))
 
-    numeracao = f"{numero_imagem}/{total_imagens}"
-    w, h = draw.textbbox((0,0), numeracao, font=fonte_rodape)[2:]
-    draw.text((largura-w-margem, margem), numeracao, font=fonte_rodape, fill=cor_texto)
+        bot.send_media_group(message.chat.id, medias)
+        bot.edit_message_text("Carrossel pronto! 🔥 Pode postar.", message.chat.id, msg_espera.message_id)
 
-    nome_arquivo = f"carrossel_{numero_imagem}.png"
-    img.save(nome_arquivo)
-    return nome_arquivo
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Fala! Eu sou o Clover Carrossel 🤖\n\nManda /criar que eu te ajudo a fazer um carrossel completo pro Insta.")
-
-async def iniciar_criacao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Qual o tema do carrossel que você quer criar?")
-    return PEGANDO_TEMA
-
-async def receber_tema(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['tema'] = update.message.text
-    await update.message.reply_text("Show! E qual @ você quer que apareça na última imagem?\n\nEx: @seuinstagram")
-    return PEGANDO_ARROBA
-
-async def receber_arroba_e_gerar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    arroba = update.message.text
-    tema = context.user_data['tema']
-    if not arroba.startswith('@'):
-        arroba = '@' + arroba
-    await update.message.reply_text(f"Perfeito! Criando carrossel sobre '{tema}' para {arroba}... 🧠✨ Isso pode levar uns 20s.")
-    try:
-        prompt = f"""
-        Crie 5 textos curtos para um carrossel do Instagram sobre: {tema}.
-        Regra 1: Tom persuasivo, direto e que gera curiosidade.
-        Regra 2: Cada texto tem que caber numa imagem 1080x1080. Máximo 2 frases curtas.
-        Regra 3: O primeiro texto é a CAPA. Tem que ser um título forte e chamativo.
-        Regra 4: O último texto é a CTA. Termine com: 'Curtiu? Me segue pra mais: {arroba}'
-        Regra 5: Não use hashtags ou emojis.
-        Formato: Separe cada um dos 5 textos com ---
-        """
-        response = model.generate_content(prompt)
-        textos = [t.strip() for t in response.text.split('---') if t.strip()]
-        total = len(textos)
-        for i, texto in enumerate(textos, 1):
-            arquivo_imagem = criar_imagem_carrossel(texto, i, total, arroba)
-            await update.message.reply_photo(photo=open(arquivo_imagem, 'rb'))
-            os.remove(arquivo_imagem)
-        await update.message.reply_text("Pronto! Carrossel finalizado ✅\nManda /criar pra fazer outro.")
     except Exception as e:
-        await update.message.reply_text(f"Deu erro ao gerar: {e}\n\nTenta de novo com /criar")
-    return ConversationHandler.END
+        bot.edit_message_text(f"Deu erro: {e}\nConfere se a chave da API do Gemini tá correta.", message.chat.id, msg_espera.message_id)
 
-async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Criação cancelada. Manda /criar quando quiser recomeçar.")
-    return ConversationHandler.END
+print("Bot Universal rodando...")
+from flask import Flask
+from threading import Thread
 
-def main():
-    application = Application.builder().token(TOKEN).build()
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('criar', iniciar_criacao)],
-        states={
-            PEGANDO_TEMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_tema)],
-            PEGANDO_ARROBA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_arroba_e_gerar)],
-        },
-        fallbacks=[CommandHandler('cancelar', cancelar)],
-    )
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(conv_handler)
-    print("Bot Universal rodando...")
-    application.run_polling()
+app = Flask('')
 
-if __name__ == '__main__':
-    main()
+@app.route('/')
+def home():
+    return "Bot tá online!"
+
+def run():
+  app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()
+bot.polling()
